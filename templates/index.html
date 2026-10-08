@@ -1,0 +1,138 @@
+<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>RailMind - AI Railway Booking</title>
+<link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/css/bootstrap.min.css" rel="stylesheet">
+<style>
+ body{background:#f4f6fb}.hero{background:linear-gradient(120deg,#1b2a49,#2f5bea);color:#fff;padding:2rem 0 4rem}
+ .card{border:0;box-shadow:0 2px 12px rgba(27,42,73,.08);border-radius:14px}.pull{margin-top:-3rem}
+ .cls-box{border:1px solid #dde3f0;border-radius:10px;padding:.6rem;cursor:pointer;background:#fff;height:100%}.cls-box:hover{border-color:#2f5bea}
+ .badge-best{background:#ffc107;color:#000}.pnr{font-family:monospace;letter-spacing:2px;font-size:1.4rem}
+ .ai{font-size:.8rem;background:#eef3ff;border-radius:8px;padding:.3rem .5rem;margin-top:.4rem}
+</style></head><body>
+<div class="hero"><div class="container d-flex justify-content-between align-items-start">
+ <div><h2 class="fw-bold mb-0">🚆 RailMind</h2><div class="opacity-75">AI-powered railway booking &amp; recommendation</div></div>
+ <div id="auth"></div></div></div>
+<div class="container pull">
+ <ul class="nav nav-pills mb-3 bg-white p-2 rounded-3 shadow-sm" id="tabs">
+  <li class="nav-item"><button class="nav-link active" data-t="search">Search &amp; Book</button></li>
+  <li class="nav-item"><button class="nav-link" data-t="pnr">PNR Status</button></li>
+  <li class="nav-item"><button class="nav-link" data-t="mine">My Bookings</button></li>
+  <li class="nav-item"><button class="nav-link" data-t="conn">Connection Safety</button></li></ul>
+ <datalist id="stl"></datalist>
+ <div id="alert"></div>
+
+ <section id="t-search"><div class="card p-3 mb-3"><div class="row g-2 align-items-end">
+  <div class="col-md-3"><label class="form-label small">From</label><input id="from" list="stl" class="form-control" placeholder="City or code" autocomplete="off"></div>
+  <div class="col-md-3"><label class="form-label small">To</label><input id="to" list="stl" class="form-control" placeholder="City or code" autocomplete="off"></div>
+  <div class="col-md-3"><label class="form-label small">Date</label><input type="date" id="date" class="form-control"></div>
+  <div class="col-md-3"><button class="btn btn-primary w-100" onclick="search()">Search trains</button></div></div></div>
+  <div id="results"></div></section>
+
+ <section id="t-pnr" hidden><div class="card p-3 mb-3"><label class="form-label">Enter 10-digit PNR</label>
+  <div class="input-group"><input id="pnrIn" class="form-control" maxlength="10" inputmode="numeric" placeholder="e.g. 3087188981">
+  <button class="btn btn-primary" onclick="checkPnr()">Check status</button></div></div><div id="pnrOut"></div></section>
+
+ <section id="t-mine" hidden><div id="mineOut"></div></section>
+
+ <section id="t-conn" hidden><div class="card p-3 mb-3"><p class="text-muted small mb-2">Will a delay on Train A cost you the connection to Train B?</p>
+  <div class="row g-2 align-items-end">
+  <div class="col-md-3"><label class="form-label small">Train A (arriving)</label><select id="ta" class="form-select"></select></div>
+  <div class="col-md-3"><label class="form-label small">Train B (next)</label><select id="tb" class="form-select"></select></div>
+  <div class="col-md-2"><label class="form-label small">Transfer station</label><input id="tst" list="stl" class="form-control" placeholder="City or code" autocomplete="off"></div>
+  <div class="col-md-2"><label class="form-label small">Train A start date</label><input type="date" id="cdate" class="form-control"></div>
+  <div class="col-md-2"><button class="btn btn-primary w-100" onclick="checkConn()">Check</button></div></div></div><div id="connOut"></div></section>
+</div>
+
+<div class="modal fade" id="authM"><div class="modal-dialog"><div class="modal-content p-3">
+ <h5 id="authT">Log in</h5><input id="aName" class="form-control mb-2" placeholder="Full name" hidden>
+ <input id="aEmail" class="form-control mb-2" placeholder="Email"><input id="aPw" type="password" class="form-control mb-2" placeholder="Password (8+ chars)">
+ <button class="btn btn-primary" onclick="submitAuth()">Continue</button>
+ <a href="#" class="small mt-2" onclick="toggleReg();return false" id="authSw">New here? Register</a></div></div></div>
+
+<div class="modal fade" id="bookM"><div class="modal-dialog modal-lg"><div class="modal-content p-3"><div id="bookBody"></div></div></div></div>
+
+<script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/js/bootstrap.bundle.min.js"></script>
+<script>
+const $=id=>document.getElementById(id), esc=s=>String(s??"").replace(/[&<>"']/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
+const api=async(u,o)=>{const r=await fetch(u,o&&o.body?{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(o.body)}:o);
+  const j=await r.json().catch(()=>({error:"Server error"})); if(!r.ok) throw Object.assign(new Error(j.error||"Request failed"),{status:r.status}); return j};
+const alertBox=(m,t="danger")=>{$("alert").innerHTML=m?`<div class="alert alert-${t} alert-dismissible">${esc(m)}<button class="btn-close" data-bs-dismiss="alert"></button></div>`:""};
+let user=null,reg=false,ctx={}, authM, bookM;
+const code=id=>{const v=$(id).value.trim(), m=v.match(/\(([A-Za-z0-9]+)\)\s*$/); return (m?m[1]:v).toUpperCase()};
+const iso=d=>d.toISOString().slice(0,10); const hm=m=>`${Math.floor(m/60)}h ${m%60}m`;
+
+async function init(){
+  authM=new bootstrap.Modal($("authM")); bookM=new bootstrap.Modal($("bookM"));
+  const st=await api("/api/stations"), tr=await api("/api/trains");
+  const lab=s=>`${s.name} (${s.code})`; window._st=st;
+  $("stl").innerHTML=st.map(s=>`<option value="${esc(lab(s))}"></option>`).join("");
+  const tOpt=tr.map(s=>`<option value="${esc(s.number)}">${esc(s.name)} (${esc(s.number)})</option>`).join(""); ["ta","tb"].forEach(i=>$(i).innerHTML=tOpt);
+  const pre=(id,c)=>{const s=st.find(x=>x.code===c); if(s) $(id).value=lab(s)}; pre("from","BPL"); pre("to","NGP"); pre("tst","BPL");
+  if(tr[1]) $("tb").selectedIndex=1;
+  const d=new Date(Date.now()+7*864e5); $("date").value=$("cdate").value=iso(d); $("date").min=$("cdate").min=iso(new Date());
+  user=(await api("/api/me")).name; renderAuth();
+  document.querySelectorAll("#tabs button").forEach(b=>b.onclick=()=>tab(b.dataset.t));
+}
+function tab(t){document.querySelectorAll("#tabs button").forEach(b=>b.classList.toggle("active",b.dataset.t===t));
+  ["search","pnr","mine","conn"].forEach(x=>$("t-"+x).hidden=x!==t); alertBox(""); if(t==="mine") loadMine()}
+function renderAuth(){$("auth").innerHTML=user?`<span class="me-2">Hi, ${esc(user)}</span><button class="btn btn-sm btn-light" onclick="logout()">Log out</button>`:`<button class="btn btn-light btn-sm" onclick="authM.show()">Log in / Register</button>`}
+function toggleReg(){reg=!reg;$("aName").hidden=!reg;$("authT").textContent=reg?"Register":"Log in";$("authSw").textContent=reg?"Have an account? Log in":"New here? Register"}
+async function submitAuth(){try{const r=await api(reg?"/api/register":"/api/login",{body:{name:$("aName").value,email:$("aEmail").value,password:$("aPw").value}});
+  user=r.name;authM.hide();renderAuth();alertBox("Welcome, "+user,"success")}catch(e){alertBox(e.message)}}
+async function logout(){await api("/api/logout",{body:{}});user=null;renderAuth();$("mineOut").innerHTML=""}
+
+async function search(){
+  try{const q=new URLSearchParams({from:code("from"),to:code("to"),date:$("date").value}); const r=await api("/api/search?"+q); ctx={from:code("from"),to:code("to"),date:$("date").value}; alertBox("");
+    if(!r.results.length){$("results").innerHTML='<div class="alert alert-warning">No direct trains between these stations.</div>';return}
+    window._res=r.results;
+    $("results").innerHTML=r.results.map((t,i)=>`<div class="card p-3 mb-3"><div class="d-flex justify-content-between flex-wrap">
+      <div><h5 class="mb-0">${esc(t.train_no)} · ${esc(t.name)} ${t.best?'<span class="badge badge-best">★ AI top pick</span>':""}</h5>
+      <div class="small text-muted">${esc(t.dep)} → ${esc(t.arr)} · ${hm(t.duration_min)} · avg delay ${Math.round(t.avg_delay)} min</div>
+      <div class="small text-primary">Why: ${esc(t.why)} (score ${t.score})</div></div></div>
+      <div class="row g-2 mt-2">${t.classes.map(c=>`<div class="col-6 col-md-3"><div class="cls-box" onclick="openBook(${i},'${c.cls}')">
+        <b>${c.cls}</b> · ₹${c.fare}<br><span class="${c.status==="AVL"?"text-success":"text-danger"} fw-semibold">${c.status==="AVL"?c.count+" available":"WL "+c.count}</span>
+        ${c.wl_prob!=null?`<span class="small"> · ${Math.round(c.wl_prob*100)}% confirm</span>`:""}
+        <div class="ai">🤖 <b>${c.advice==="WAIT"?"Wait":"Book now"}</b>: ${esc(c.reason)}</div></div></div>`).join("")}</div></div>`).join("")
+  }catch(e){alertBox(e.message)}}
+
+function openBook(i,cls){
+  if(!user){alertBox("Please log in to book.");authM.show();return}
+  const t=window._res[i],c=t.classes.find(x=>x.cls===cls); ctx.t=t;ctx.cls=cls; ctx.n=0;
+  $("bookBody").innerHTML=`<h5>Book ${esc(t.train_no)} ${esc(t.name)} — ${cls}</h5><div class="small text-muted mb-2">${esc(t.from_name)} → ${esc(t.to_name)} · ${esc(ctx.date)} · ₹${c.fare}/passenger
+    ${c.status==="WL"?'<span class="text-danger">· Currently waitlisted</span>':""}</div><div id="paxList"></div>
+    <button class="btn btn-sm btn-outline-secondary mb-3" onclick="addPax()">+ Add passenger (max 4)</button><div><button class="btn btn-primary" onclick="confirmBook()">Confirm booking</button></div>`;
+  addPax(); bookM.show()}
+function addPax(){if(ctx.n>=4)return;ctx.n++;$("paxList").insertAdjacentHTML("beforeend",`<div class="row g-2 mb-2 pax"><div class="col-6"><input class="form-control pn" placeholder="Name"></div>
+  <div class="col-3"><input class="form-control pa" type="number" min="1" max="120" placeholder="Age"></div>
+  <div class="col-3"><select class="form-select pg"><option value="M">Male</option><option value="F">Female</option><option value="O">Other</option></select></div></div>`)}
+async function confirmBook(){
+  const pax=[...document.querySelectorAll(".pax")].map(r=>({name:r.querySelector(".pn").value,age:parseInt(r.querySelector(".pa").value),gender:r.querySelector(".pg").value}));
+  try{const b=await api("/api/book",{body:{train_no:ctx.t.train_no,date:ctx.date,from:ctx.from,to:ctx.to,cls:ctx.cls,passengers:pax}});
+    $("bookBody").innerHTML=`<div class="text-center"><div class="text-success fs-5">✅ Booking ${b.status==="CNF"?"confirmed":"placed (waitlisted)"}</div>
+      <div class="text-muted small">Your PNR</div><div class="pnr mb-2">${esc(b.pnr)}</div></div>${detail(b)}
+      <div class="text-center mt-3"><a class="btn btn-success" href="/api/ticket/${esc(b.pnr)}.pdf">⬇ Download Ticket (PDF)</a>
+      <button class="btn btn-outline-secondary ms-2" data-bs-dismiss="modal">Close</button></div>`; search()
+  }catch(e){alertBox(e.message);if(e.status===401){bookM.hide();authM.show()}}}
+
+function detail(b){return `<div class="card p-3 mt-2"><div class="row small">
+  <div class="col-md-6"><b>Train:</b> ${esc(b.train_no)} ${esc(b.train_name)}<br><b>Class:</b> ${esc(b.cls)} · <b>Fare:</b> ₹${esc(b.fare)}<br><b>Journey date:</b> ${esc(b.date)}</div>
+  <div class="col-md-6"><b>Boarding:</b> ${esc(b.from_name)} (${esc(b.from_code)}) · ${esc(b.dep_time)}<br><b>Dropping:</b> ${esc(b.to_name)} (${esc(b.to_code)}) · ${esc(b.arr_time)}</div></div>
+  <table class="table table-sm mt-2 mb-0"><thead><tr><th>Passenger</th><th>Age/Sex</th><th>Coach</th><th>Seat</th><th>Berth</th><th>Status</th></tr></thead><tbody>
+  ${b.passengers.map(p=>`<tr><td>${esc(p.name)}</td><td>${p.age}/${esc(p.gender)}</td><td>${esc(p.coach||"-")}</td><td>${esc(p.seat_no||"-")}</td><td>${esc(p.berth||"-")}</td>
+  <td><span class="badge ${p.status==="CNF"?"bg-success":"bg-danger"}">${p.status==="CNF"?"CNF":"WL/"+p.wl_no}</span></td></tr>`).join("")}</tbody></table>
+  ${b.ai?`<div class="ai mt-2">🤖 ${esc(b.ai.note)}</div>`:""}</div>`}
+
+async function checkPnr(){const p=$("pnrIn").value.trim();
+  if(!/^\d{10}$/.test(p)){$("pnrOut").innerHTML='<div class="alert alert-danger">PNR must be exactly 10 digits.</div>';return}
+  try{const b=await api("/api/pnr/"+p);$("pnrOut").innerHTML=`<div class="pnr mb-1">PNR ${esc(b.pnr)} · <span class="badge ${b.status==="CNF"?"bg-success":"bg-danger"}">${b.status==="CNF"?"CONFIRMED":"WAITLISTED"}</span></div>`+detail(b)}
+  catch(e){$("pnrOut").innerHTML=`<div class="alert alert-danger">${esc(e.message)}</div>`}}
+async function loadMine(){
+  if(!user){$("mineOut").innerHTML='<div class="alert alert-info">Log in to see your bookings.</div>';return}
+  const r=await api("/api/my-bookings");
+  $("mineOut").innerHTML=r.length?r.map(b=>`<div class="mb-3"><span class="pnr">${esc(b.pnr)}</span> <a class="btn btn-sm btn-success ms-2" href="/api/ticket/${esc(b.pnr)}.pdf">⬇ PDF</a>${detail(b)}</div>`).join(""):"<div class='alert alert-info'>No bookings yet.</div>"}
+async function checkConn(){try{const r=await api("/api/connection",{body:{train_a:$("ta").value,train_b:$("tb").value,station:code("tst"),date:$("cdate").value}});
+  $("connOut").innerHTML=`<div class="card p-3"><div class="small text-muted">Train A arrives ${esc(r.arrive)} → Train B departs ${esc(r.depart)} (${r.buffer_min}-min buffer)</div>
+   <div class="display-6 ${r.risky?"text-danger":"text-success"}">${r.safe_pct}% Safe Connection</div><div>${esc(r.message)}</div>
+   ${r.alternatives.length?"<hr><b>Safer alternatives:</b><ul>"+r.alternatives.map(a=>`<li>${esc(a.train_no)} ${esc(a.name)} — departs ${esc(a.dep)} (${a.buffer} min buffer)</li>`).join("")+"</ul>":""}</div>`
+  }catch(e){$("connOut").innerHTML=`<div class="alert alert-danger">${esc(e.message)}</div>`}}
+init();
+</script></body></html>
